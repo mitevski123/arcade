@@ -1,0 +1,173 @@
+import pygame
+
+# --- Constants ---
+SCREEN_WIDTH = 800
+SCREEN_HEIGHT = 600
+PLAYER_SPEED = 5
+
+# Walkable floor boundaries (Z-axis simulation)
+MIN_Y = 350  
+MAX_Y = 550  
+
+# Colors
+WHITE = (255, 255, 255)
+RED = (255, 50, 50)
+BLUE = (50, 50, 255)
+BLACK = (0, 0, 0)
+GRAY = (80, 80, 80)
+SKY_BLUE = (135, 206, 235)
+GROUND_GREEN = (34, 139, 34)
+
+# --- Player Class ---
+class Player(pygame.sprite.Sprite):
+    def __init__(self):
+        super().__init__()
+        self.image = pygame.Surface([40, 80])
+        self.image.fill(WHITE)
+        self.rect = self.image.get_rect()
+        self.rect.x = 150
+        self.rect.y = 400
+        
+        # Shadow setup
+        self.shadow_rect = pygame.Rect(0, 0, 40, 10)
+        self.update_shadow()
+        
+        # Combat states
+        self.is_attacking = False
+        self.attack_timer = 0
+        self.facing_right = True
+
+    def update_shadow(self):
+        self.shadow_rect.midbottom = self.rect.midbottom
+
+    def update(self):
+        keys = pygame.key.get_pressed()
+        
+        # Handle attack cooldown/state
+        if self.is_attacking:
+            self.attack_timer -= 1
+            if self.attack_timer <= 0:
+                self.is_attacking = False
+                self.image.fill(WHITE) # Reset color
+        else:
+            # Only move if not actively attacking (classic arcade style!)
+            if keys[pygame.K_LEFT]:
+                self.rect.x -= PLAYER_SPEED
+                self.facing_right = False
+            if keys[pygame.K_RIGHT]:
+                self.rect.x += PLAYER_SPEED
+                self.facing_right = True
+            if keys[pygame.K_UP]:
+                self.rect.y -= PLAYER_SPEED
+            if keys[pygame.K_DOWN]:
+                self.rect.y += PLAYER_SPEED
+
+            # Trigger attack
+            if keys[pygame.K_SPACE]:
+                self.is_attacking = True
+                self.attack_timer = 10  # Punch lasts for 10 frames
+                self.image.fill(RED)     # Flash red during punch
+
+        # Screen boundaries
+        if self.rect.left < 0: self.rect.left = 0
+        if self.rect.right > SCREEN_WIDTH: self.rect.right = SCREEN_WIDTH
+        if self.rect.bottom > MAX_Y: self.rect.bottom = MAX_Y
+        if self.rect.bottom < MIN_Y: self.rect.bottom = MIN_Y
+
+        self.update_shadow()
+
+# --- Enemy Class ---
+class Enemy(pygame.sprite.Sprite):
+    def __init__(self):
+        super().__init__()
+        self.image = pygame.Surface([40, 80])
+        self.image.fill(BLUE)
+        self.rect = self.image.get_rect()
+        self.rect.x = 550
+        self.rect.y = 400
+        
+        # Shadow setup
+        self.shadow_rect = pygame.Rect(0, 0, 40, 10)
+        self.update_shadow()
+        
+        self.knockback_timer = 0
+
+    def update_shadow(self):
+        self.shadow_rect.midbottom = self.rect.midbottom
+
+    def take_hit(self, knockback_dir):
+        """Triggered when the player successfully punches the enemy."""
+        self.image.fill(WHITE) # Flash white on impact
+        self.knockback_timer = 8
+        self.rect.x += knockback_dir * 15 # Knock backward
+
+    def update(self):
+        if self.knockback_timer > 0:
+            self.knockback_timer -= 1
+            if self.knockback_timer == 0:
+                self.image.fill(BLUE) # Reset color
+                
+        self.update_shadow()
+
+# --- Main Game Loop ---
+def main():
+    pygame.init()
+    screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
+    pygame.display.set_caption("2.5D Beat 'Em Up Prototype")
+    
+    player = Player()
+    enemy = Enemy()
+    
+    clock = pygame.time.Clock()
+    running = True
+
+    while running:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False
+
+        # --- Update ---
+        player.update()
+        enemy.update()
+
+        # --- Hit Detection (Z-depth aware!) ---
+        if player.is_attacking and player.attack_timer == 9: # Check on the strike frame
+            # 1. Z-axis check (Are their feet/shadows on a similar vertical plane?)
+            z_diff = abs(player.shadow_rect.centery - enemy.shadow_rect.centery)
+            
+            # 2. X-axis check (Is the enemy in front of the player's attack direction?)
+            x_diff = enemy.rect.centerx - player.rect.centerx
+            in_range_x = False
+            
+            if player.facing_right and 0 < x_diff < 70:
+                in_range_x = True
+            elif not player.facing_right and -70 < x_diff < 0:
+                in_range_x = True
+
+            # Connect hit if both depth and reach conditions match!
+            if z_diff < 25 and in_range_x:
+                knock_direction = 1 if player.facing_right else -1
+                enemy.take_hit(knock_direction)
+
+        # --- Draw (Y-Sorting / Depth Rendering) ---
+        screen.fill(SKY_BLUE)
+        pygame.draw.rect(screen, GROUND_GREEN, [0, MIN_Y - 40, SCREEN_WIDTH, SCREEN_HEIGHT - MIN_Y + 40])
+        
+        # Shadows go first
+        pygame.draw.ellipse(screen, GRAY, player.shadow_rect)
+        pygame.draw.ellipse(screen, GRAY, enemy.shadow_rect)
+        
+        # Draw characters sorted by bottom coordinate (Z-depth)
+        characters = [player, enemy]
+        characters.sort(key=lambda char: char.rect.bottom)
+        
+        for char in characters:
+            screen.blit(char.image, char.rect)
+
+        pygame.display.flip()
+        clock.tick(60)
+
+    pygame.quit()
+
+if __name__ == "__main__":
+    main()
