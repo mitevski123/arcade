@@ -465,4 +465,18 @@ def main():
             screen_x = sprite.rect.x - game_manager.camera_x
             
             if sprite == player:
-          
+                # Subtract y_offset to draw the jumping player in the air
+                screen_y = sprite.rect.y - int(player.y_offset)
+            else:
+                screen_y = sprite.rect.y
+                
+            screen.blit(sprite.image, (screen_x, screen_y))
+
+        game_manager.draw_hud(screen, player)
+        pygame.display.flip()
+        clock.tick(60)
+
+    pygame.quit()
+
+if __name__ == "__main__":
+    main()
