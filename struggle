@@ -45,7 +45,7 @@ class GameManager:
         self.go_text = self.font_medium.render('GO ➡️', True, RED)
         self.go_flash_timer = 0
 
-        # Waves: (Trigger camera X, Spawn lists, is_boss_wave)
+        # Waves: (Trigger camera X, Spawn lists)
         self.waves = [
             {'trigger': 400, 'spawns': [(1000, 400, 'minion'), (1100, 480, 'minion')], 'spawned': False},
             {'trigger': 1400, 'spawns': [(2000, 380, 'minion'), (2100, 480, 'minion'), (2200, 430, 'minion')], 'spawned': False},
@@ -64,7 +64,7 @@ class GameManager:
                 pygame.draw.circle(screen, (0, 128, 0), (tree_pos_x + 10, MIN_Y - 120), 40) 
 
     def draw_hud(self, screen, player):
-        # Player Health Bar & Info
+        # Player Health Bar
         pygame.draw.rect(screen, BLACK, [20, 20, 204, 24])
         pygame.draw.rect(screen, RED, [22, 22, 200, 20])
         hp_width = max(0, int(200 * (player.hp / player.max_hp)))
@@ -91,13 +91,13 @@ class GameManager:
             enemy_text = self.font_small.render(name, True, WHITE)
             screen.blit(enemy_text, (SCREEN_WIDTH - 224, 42))
 
-        # Flashing "GO ➡️" indicator
+        # Flashing "GO"
         if not self.screen_lock and not self.victory:
             self.go_flash_timer = (self.go_flash_timer + 1) % 60
             if self.go_flash_timer < 30:
                 screen.blit(self.go_text, (SCREEN_WIDTH - self.go_text.get_width() - 20, 20))
 
-        # Victory Screen
+        # Victory
         if self.victory:
             overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
             overlay.fill((0, 0, 0, 150))
@@ -107,7 +107,7 @@ class GameManager:
             screen.blit(victory_text, (SCREEN_WIDTH//2 - victory_text.get_width()//2, SCREEN_HEIGHT//2 - 60))
             screen.blit(sub_text, (SCREEN_WIDTH//2 - sub_text.get_width()//2, SCREEN_HEIGHT//2 + 20))
 
-        # Game Over Screen
+        # Game Over
         elif self.game_over:
             overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
             overlay.fill((150, 0, 0, 150))
@@ -131,13 +131,21 @@ class Player(pygame.sprite.Sprite):
         self.hp = self.max_hp
         self.lives = 3
 
+        # Combat & Movement States
         self.is_attacking = False
         self.attack_timer = 0
         self.facing_right = True
         self.is_hit = False
         self.hit_timer = 0
 
+        # --- NEW: Jump Variables ---
+        self.is_jumping = False
+        self.y_offset = 0.0      # Current jump height above ground
+        self.y_velocity = 0.0    # Speed of upward/downward movement
+        self.gravity = 0.8       # Pulls player back down
+
     def update_shadow(self):
+        # The shadow stays on the baseline floor position (rect.bottom)
         self.shadow_rect.midbottom = self.rect.midbottom
 
     def take_hit(self, damage, knockback_dir):
@@ -147,11 +155,19 @@ class Player(pygame.sprite.Sprite):
             self.rect.x += knockback_dir * 20
             self.hp = max(0, self.hp - damage)
             self.image.fill(YELLOW)
+            
+            # If hit while jumping, crash to the ground immediately
+            if self.is_jumping:
+                self.is_jumping = False
+                self.y_offset = 0
+                self.y_velocity = 0
 
     def reset_spawn(self):
         self.hp = self.max_hp
         self.is_hit = False
         self.is_attacking = False
+        self.is_jumping = False
+        self.y_offset = 0
         self.image.fill(WHITE)
         self.rect.y = 400
 
@@ -173,20 +189,59 @@ class Player(pygame.sprite.Sprite):
             self.update_shadow()
             return
 
-        if self.is_attacking:
+        # --- Physics Update: Jumping ---
+        if self.is_jumping:
+            self.y_offset += self.y_velocity
+            self.y_velocity -= self.gravity  # Apply gravity force
+            
+            # Check if landed back on the ground
+            if self.y_offset <= 0:
+                self.y_offset = 0
+                self.is_jumping = False
+                self.y_velocity = 0
+                self.is_attacking = False # Cancel jump kick upon landing
+                self.image.fill(WHITE)
+
+        # Standard Actions
+        keys = pygame.key.get_pressed()
+        
+        if self.is_attacking and not self.is_jumping:
+            # Ground attack lock
             self.attack_timer -= 1
             if self.attack_timer <= 0:
                 self.is_attacking = False
                 self.image.fill(WHITE)
         else:
-            keys = pygame.key.get_pressed()
-            if keys[pygame.K_LEFT]: self.rect.x -= PLAYER_SPEED; self.facing_right = False
-            if keys[pygame.K_RIGHT]: self.rect.x += PLAYER_SPEED; self.facing_right = True
-            if keys[pygame.K_UP]: self.rect.y -= PLAYER_SPEED
-            if keys[pygame.K_DOWN]: self.rect.y += PLAYER_SPEED
-            if keys[pygame.K_SPACE]: self.is_attacking = True; self.attack_timer = 10; self.image.fill(RED)
+            # Handle Movement (Allowed in air and ground)
+            if keys[pygame.K_LEFT]: 
+                self.rect.x -= PLAYER_SPEED
+                self.facing_right = False
+            if keys[pygame.K_RIGHT]: 
+                self.rect.x += PLAYER_SPEED
+                self.facing_right = True
+            if keys[pygame.K_UP]: 
+                self.rect.y -= PLAYER_SPEED
+            if keys[pygame.K_DOWN]: 
+                self.rect.y += PLAYER_SPEED
 
-        # Clamping boundary checks
+            # Trigger Jump (Press 'C')
+            if keys[pygame.K_c] and not self.is_jumping:
+                self.is_jumping = True
+                self.y_velocity = 12.0  # Launch velocity
+
+            # Trigger Attack (Press 'SPACE')
+            if keys[pygame.K_SPACE]:
+                if self.is_jumping:
+                    # Jump Kick! (Turns player yellow mid-air)
+                    self.is_attacking = True
+                    self.image.fill(YELLOW)
+                else:
+                    # Standard Ground Punch
+                    self.is_attacking = True
+                    self.attack_timer = 10
+                    self.image.fill(RED)
+
+        # Clamping floor boundaries
         if self.rect.bottom > MAX_Y: self.rect.bottom = MAX_Y
         if self.rect.bottom < MIN_Y: self.rect.bottom = MIN_Y
         if self.rect.left < 0: self.rect.left = 0
@@ -198,19 +253,17 @@ class Player(pygame.sprite.Sprite):
 
         self.update_shadow()
 
-# --- Enemy Class (Minions & Bosses) ---
+# --- Enemy Class ---
 class Enemy(pygame.sprite.Sprite):
-    # FIX: Set default enemy_type to None to avoid mutable default argument issues
     def __init__(self, x, y, enemy_type=None):
         super().__init__()
-        # If no type is specified, default to 'minion'
         if enemy_type is None:
             enemy_type = 'minion'
             
         self.enemy_type = enemy_type
         
         if enemy_type == 'boss':
-            self.image = pygame.Surface([60, 100]) # Make boss bigger
+            self.image = pygame.Surface([60, 100])
             self.image.fill(PURPLE)
             self.max_health = 10.0
             self.speed = BOSS_SPEED
@@ -283,7 +336,8 @@ class Enemy(pygame.sprite.Sprite):
         dx, dy = target_x - self.rect.centerx, target_y - self.rect.bottom
         self.facing_right = dx > 0
 
-        if abs(dx) < 65 and abs(dy) < 15 and self.attack_cooldown == 0 and player_target.hp > 0 and not player_target.is_hit:
+        # AI attacks only if player is grounded (cannot easily punch jumping players)
+        if abs(dx) < 65 and abs(dy) < 15 and self.attack_cooldown == 0 and player_target.hp > 0 and not player_target.is_hit and not player_target.is_jumping:
             self.is_attacking = True
             self.attack_timer = 15
             self.attack_cooldown = 45 if not self.is_boss else 30
@@ -338,39 +392,77 @@ def main():
                 target_camera_x = player.rect.centerx - SCREEN_WIDTH // 2
                 game_manager.camera_x = max(0, min(target_camera_x, game_manager.world_width - SCREEN_WIDTH))
 
-            if player.is_attacking and player.attack_timer == 9:
-                for enemy in enemies:
-                    z_diff = abs(player.shadow_rect.centery - enemy.shadow_rect.centery)
-                    x_diff = enemy.rect.centerx - player.rect.centerx
-                    in_range_x = (player.facing_right and 0 < x_diff < 70) or (not player.facing_right and -70 < x_diff < 0)
-                    if z_diff < 20 and in_range_x:
-                        enemy.take_hit(1 if player.facing_right else -1, game_manager)
-                        game_manager.score += 50
+            # --- COMBAT LOGIC ---
+            # 1. Player attacking Enemies
+            if player.is_attacking:
+                # Ground Punch (Frame 9 trigger) or Flying Jump Kick (Active entire time player is falling/rising)
+                if (not player.is_jumping and player.attack_timer == 9) or player.is_jumping:
+                    for enemy in enemies:
+                        z_diff = abs(player.shadow_rect.centery - enemy.shadow_rect.centery)
+                        
+                        # Compare screen coordinates
+                        enemy_screen_x = enemy.rect.centerx - game_manager.camera_x
+                        player_screen_x = player.rect.centerx - game_manager.camera_x
+                        x_diff = enemy_screen_x - player_screen_x
+                        
+                        in_range_x = (player.facing_right and 0 < x_diff < 85) or (not player.facing_right and -85 < x_diff < 0)
+                        
+                        # Check height collision: Enemy height is 80px. Player height is 80px.
+                        # For jump kick, player's feet (bottom - offset) must be above enemy's head (top) and below enemy's feet (bottom)
+                        enemy_top = enemy.rect.top
+                        enemy_bottom = enemy.rect.bottom
+                        player_foot_y = player.rect.bottom - player.y_offset
+                        
+                        in_range_y = enemy_top - 20 <= player_foot_y <= enemy_bottom + 10
+
+                        if z_diff < 22 and in_range_x and in_range_y:
+                            knock_dir = 1 if player.facing_right else -1
+                            enemy.take_hit(knock_dir, game_manager)
+                            game_manager.score += 50
+                            
+                            # Landing a jump-kick gives a tiny vertical bounce!
+                            if player.is_jumping:
+                                player.y_velocity = 4.0 
             
+            # 2. Enemies attacking Player
             for enemy in enemies:
                 if enemy.is_attacking and enemy.attack_timer == 5:
                     z_diff = abs(player.shadow_rect.centery - enemy.shadow_rect.centery)
-                    x_diff = player.rect.centerx - enemy.rect.centerx
+                    
+                    enemy_screen_x = enemy.rect.centerx - game_manager.camera_x
+                    player_screen_x = player.rect.centerx - game_manager.camera_x
+                    x_diff = player_screen_x - enemy_screen_x
+                    
                     in_range_x = (enemy.facing_right and 0 < x_diff < 70) or (not enemy.facing_right and -70 < x_diff < 0)
-                    if z_diff < 20 and in_range_x:
+                    
+                    # Enemies can only punch player on the ground
+                    if z_diff < 20 and in_range_x and not player.is_jumping:
                         player.take_hit(enemy.damage, 1 if enemy.facing_right else -1)
 
+        # --- Draw Stage ---
         game_manager.draw_background(screen)
+        
+        # Sort sprites by floor coordinate (rect.bottom)
         sorted_sprites = sorted(all_sprites.sprites(), key=lambda s: s.rect.bottom)
         
+        # 1. Draw Shadows (with dynamic sizing for jump height)
         for sprite in sorted_sprites:
             shadow_x = sprite.shadow_rect.x - game_manager.camera_x
-            pygame.draw.ellipse(screen, GRAY, (shadow_x, sprite.shadow_rect.y, sprite.shadow_rect.width, sprite.shadow_rect.height))
             
+            if sprite == player and player.is_jumping:
+                # Shrink shadow as player goes higher
+                shrink_factor = max(0.3, 1.0 - (player.y_offset / 150.0))
+                sh_width = int(sprite.shadow_rect.width * shrink_factor)
+                sh_height = int(sprite.shadow_rect.height * shrink_factor)
+                sh_x = shadow_x + (sprite.shadow_rect.width - sh_width) // 2
+                sh_y = sprite.shadow_rect.y
+                pygame.draw.ellipse(screen, GRAY, (sh_x, sh_y, sh_width, sh_height))
+            else:
+                pygame.draw.ellipse(screen, GRAY, (shadow_x, sprite.shadow_rect.y, sprite.shadow_rect.width, sprite.shadow_rect.height))
+            
+        # 2. Draw Sprites (with Y-offset applied for jumping)
         for sprite in sorted_sprites:
             screen_x = sprite.rect.x - game_manager.camera_x
-            screen.blit(sprite.image, (screen_x, sprite.rect.y))
-
-        game_manager.draw_hud(screen, player)
-        pygame.display.flip()
-        clock.tick(60)
-
-    pygame.quit()
-
-if __name__ == "__main__":
-    main()
+            
+            if sprite == player:
+          
