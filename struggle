@@ -25,10 +25,21 @@ GRAY = (80, 80, 80)
 SKY_BLUE = (135, 206, 235)
 GROUND_GREEN = (34, 139, 34)
 
-# --- Asset Loading ---
-# Create a path to the assets folder that works on any operating system
-assets_path = os.path.join(os.path.dirname(__file__), 'assets')
+# --- Asset Loading (Absolute Path Force) ---
+import os
+import sys # Import the sys module
 
+# This block of code finds the EXACT directory where your main.py script is saved.
+# This makes it immune to PyCharm's working directory settings.
+try:
+    script_directory = os.path.dirname(os.path.abspath(__file__))
+except NameError:
+    # Fallback for some environments where __file__ is not defined
+    script_directory = os.getcwd()
+
+assets_path = os.path.join(script_directory, 'assets')
+
+# Now, we try to load everything using that exact, absolute path
 try:
     PLAYER_IDLE_SPRITE = pygame.image.load(os.path.join(assets_path, 'player_idle.png')).convert_alpha()
     PLAYER_ATTACK_SPRITE = pygame.image.load(os.path.join(assets_path, 'player_attack.png')).convert_alpha()
@@ -36,11 +47,11 @@ try:
     ENEMY_SPRITE = pygame.image.load(os.path.join(assets_path, 'enemy.png')).convert_alpha()
     ENEMY_BOSS_SPRITE = pygame.image.load(os.path.join(assets_path, 'enemy_boss.png')).convert_alpha()
 except pygame.error as e:
-    print(f"Error loading assets: {e}")
-    print("\nEnsure you have an 'assets' folder with player_idle.png, player_attack.png, player_jump.png, enemy.png, and enemy_boss.png in the same directory as your script.")
+    print(f"❌ Error loading assets: {e}")
+    print(f"\nPython was looking for your assets in this exact folder:\n'{assets_path}'")
+    print("\nPlease ensure all 5 PNG files (player_idle, player_attack, player_jump, enemy, enemy_boss) are inside that 'assets' folder.")
     pygame.quit()
-    exit()
-
+    sys.exit() # Use sys.exit() for a clean shutdown
 
 # --- Game Manager & HUD ---
 class GameManager:
