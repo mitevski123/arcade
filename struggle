@@ -5,20 +5,18 @@ import sys
 # --- Constants ---
 SCREEN_WIDTH = 800
 SCREEN_HEIGHT = 600
-MIN_Y, MAX_Y = 350, 550
+# --- FIX: Adjusted Y-boundaries for taller sprites ---
+MIN_Y, MAX_Y = 380, 560
 
 # Player Physics
 PLAYER_ACCEL = 0.8
 PLAYER_FRICTION = 0.82
 PLAYER_MAX_SPEED = 6.0
 
-# --- EXACT SPRITE SHEET MATHEMATICS ---
-# 448 / 4 columns = 112 width
-# 228 / 2 rows = 114 height
+# --- Sprite Sheet Dimensions ---
 SHEET_FRAME_WIDTH = 112
 SHEET_FRAME_HEIGHT = 114
-
-# The exact size we want them to render crisply on screen
+# --- The final size you want your character to be on screen ---
 RENDER_WIDTH = 80
 RENDER_HEIGHT = 110
 
@@ -33,42 +31,37 @@ class SpriteSheet:
         try:
             self.sheet = pygame.image.load(filename).convert_alpha()
         except pygame.error as e:
-            print(f"❌ Unable to load spritesheet image: {filename}")
+            print(f"Unable to load spritesheet image: {filename}")
             raise SystemExit(e)
 
     def get_image(self, x, y, width, height):
-        """Extracts a single frame from the sheet and scales it to our clean screen dimensions."""
         image = pygame.Surface((width, height), pygame.SRCALPHA)
         image.blit(self.sheet, (0, 0), (x, y, width, height))
-        
-        # Scale to our final rendering size using nearest-neighbor for crisp retro pixels!
-        scaled_image = pygame.transform.scale(image, (RENDER_WIDTH, RENDER_HEIGHT))
+        # --- FIX: Using smoothscale for better resizing ---
+        scaled_image = pygame.transform.smoothscale(image, (RENDER_WIDTH, RENDER_HEIGHT))
         return scaled_image
 
     def get_animation_frames(self, start_row, num_rows, frames_per_row, width, height):
-        """Extracts frames from a grid: reads left-to-right, then top-to-bottom."""
         frames = []
         for row in range(start_row, start_row + num_rows):
             for col in range(frames_per_row):
-                # Calculate coordinates based on exact column and row widths
-                frame_x = col * width
-                frame_y = row * height
+                frame_x, frame_y = col * width, row * height
                 frames.append(self.get_image(frame_x, frame_y, width, height))
         return frames
 
-# --- Player Class (Simplified for Walk & Scroll Test) ---
+# --- Player Class ---
 class Player(pygame.sprite.Sprite):
     def __init__(self, sprites):
         super().__init__()
         self.sprites = sprites
         self.image = self.sprites['idle'][0]
-        self.rect = self.image.get_rect(center=(SCREEN_WIDTH // 3, 450))
+        # --- FIX: Set the initial position using the BOTTOM of the sprite ---
+        self.rect = self.image.get_rect(midbottom=(SCREEN_WIDTH // 3, MAX_Y - 20))
         self.shadow_rect = pygame.Rect(0, 0, RENDER_WIDTH * 0.6, 10)
         
         self.pos_x, self.pos_y = float(self.rect.x), float(self.rect.y)
         self.vel_x, self.vel_y = 0.0, 0.0
         self.facing_right = True
-        
         self.anim_frame, self.anim_timer = 0, 0
         self.update_shadow()
 
@@ -84,36 +77,28 @@ class Player(pygame.sprite.Sprite):
         if keys[pygame.K_UP]: move_input_y = -1
         if keys[pygame.K_DOWN]: move_input_y = 1
         
-        # Acceleration / Friction physics
-        if move_input_x != 0: 
-            self.vel_x = max(-PLAYER_MAX_SPEED, min(self.vel_x + move_input_x * PLAYER_ACCEL, PLAYER_MAX_SPEED))
-        else: 
-            self.vel_x *= PLAYER_FRICTION
-            
-        if move_input_y != 0: 
-            self.vel_y = max(-PLAYER_MAX_SPEED, min(self.vel_y + move_input_y * PLAYER_ACCEL, PLAYER_MAX_SPEED))
-        else: 
-            self.vel_y *= PLAYER_FRICTION
+        if move_input_x != 0: self.vel_x = max(-PLAYER_MAX_SPEED, min(self.vel_x + move_input_x * PLAYER_ACCEL, PLAYER_MAX_SPEED))
+        else: self.vel_x *= PLAYER_FRICTION
+        if move_input_y != 0: self.vel_y = max(-PLAYER_MAX_SPEED, min(self.vel_y + move_input_y * PLAYER_ACCEL, PLAYER_MAX_SPEED))
+        else: self.vel_y *= PLAYER_FRICTION
             
         self.pos_x += self.vel_x
         self.pos_y += self.vel_y
         self.rect.x, self.rect.y = int(self.pos_x), int(self.pos_y)
 
-        # Animation logic (switching frames)
         is_moving = abs(self.vel_x) > 0.5 or abs(self.vel_y) > 0.5
         if is_moving:
             self.anim_timer += 1
-            if self.anim_timer >= 6:  # Higher number = slower animation speed
+            if self.anim_timer >= 5:
                 self.anim_timer = 0
                 self.anim_frame = (self.anim_frame + 1) % len(self.sprites['walk'])
             current_image = self.sprites['walk'][self.anim_frame]
         else:
-            self.anim_frame = 0  # Stay standing on frame 0
+            self.anim_frame = 0
             current_image = self.sprites['idle'][0]
             
         self.image = pygame.transform.flip(current_image, not self.facing_right, False)
         
-        # Clamp boundaries to ground floor
         if self.rect.bottom > MAX_Y: self.rect.bottom, self.pos_y = MAX_Y, float(self.rect.y)
         if self.rect.bottom < MIN_Y: self.rect.bottom, self.pos_y = MIN_Y, float(self.rect.y)
         if self.rect.left < 0: self.rect.left, self.pos_x = 0, float(self.rect.x)
@@ -131,21 +116,10 @@ def main():
         assets_path = os.path.join(script_directory, 'assets')
         player_sheet = SpriteSheet(os.path.join(assets_path, 'player_sheet.png'))
         
-        # Extract the 8 walk frames across the 2x4 grid cleanly
-        walk_frames = player_sheet.get_animation_frames(
-            start_row=0, 
-            num_rows=2, 
-            frames_per_row=4, 
-            width=SHEET_FRAME_WIDTH, 
-            height=SHEET_FRAME_HEIGHT
-        )
-        
-        player_sprites = {
-            'idle': [walk_frames[0]],  # Stand on the first frame of the walk sheet
-            'walk': walk_frames
-        }
+        walk_frames = player_sheet.get_animation_frames(start_row=0, num_rows=2, frames_per_row=4, width=SHEET_FRAME_WIDTH, height=SHEET_FRAME_HEIGHT)
+        player_sprites = {'idle': [walk_frames[0]], 'walk': walk_frames}
     except pygame.error as e:
-        print(f"❌ Error loading 'player_sheet.png': {e}\nCheck your 'assets' folder."); pygame.quit(); sys.exit()
+        print(f"❌ Error loading 'player_sheet.png': {e}"); pygame.quit(); sys.exit()
 
     player = Player(player_sprites)
     all_sprites = pygame.sprite.Group(player)
@@ -155,27 +129,21 @@ def main():
 
     while running:
         for event in pygame.event.get():
-            if event.type == pygame.QUIT: 
-                running = False
+            if event.type == pygame.QUIT: running = False
 
         player.update()
         
-        # Camera tracking
         target_camera_x = player.rect.centerx - SCREEN_WIDTH // 2
         camera_x = max(0, min(target_camera_x, 3200 - SCREEN_WIDTH))
 
-        # --- Draw Stage ---
         screen.fill(SKY_BLUE)
         pygame.draw.rect(screen, GROUND_GREEN, [0, MIN_Y - 40, SCREEN_WIDTH, SCREEN_HEIGHT])
-        
-        # Draw background scrolling indicators (trees)
         for i in range(0, 3200, 250):
             tree_pos_x = i - camera_x
             if -100 < tree_pos_x < SCREEN_WIDTH + 100:
                 pygame.draw.rect(screen, (139, 69, 19), [tree_pos_x, MIN_Y - 100, 20, 60])
                 pygame.draw.circle(screen, (0, 128, 0), (tree_pos_x + 10, MIN_Y - 120), 40)
         
-        # Draw Player & Shadow
         for sprite in all_sprites:
             screen_x = sprite.rect.x - camera_x
             shadow_x = sprite.shadow_rect.x - camera_x
@@ -184,7 +152,6 @@ def main():
         
         pygame.display.flip()
         clock.tick(60)
-        
     pygame.quit()
 
 if __name__ == "__main__":
