@@ -6,6 +6,7 @@ SCREEN_WIDTH = 800
 SCREEN_HEIGHT = 600
 PLAYER_SPEED = 5
 ENEMY_SPEED = 2.5
+BOSS_SPEED = 3.2
 
 # Walkable floor boundaries
 MIN_Y = 350  
@@ -13,64 +14,123 @@ MAX_Y = 550
 
 # Colors
 WHITE = (255, 255, 255)
-RED = (255, 50, 50)
+RED = (200, 30, 30)
+GREEN = (30, 200, 30)
 BLUE = (50, 50, 255)
-YELLOW = (255, 255, 0)
+PURPLE = (150, 0, 200) # Boss Color
+YELLOW = (255, 220, 0)
 BLACK = (0, 0, 0)
 GRAY = (80, 80, 80)
 SKY_BLUE = (135, 206, 235)
 GROUND_GREEN = (34, 139, 34)
 
-# --- Game Manager & Camera ---
+# --- Game Manager & HUD ---
 class GameManager:
     def __init__(self):
         self.camera_x = 0
-        self.world_width = 3200  # A long scrolling level
+        self.world_width = 3200  
         self.screen_lock = False
         
-        # UI Font setup
-        self.font = pygame.font.SysFont('Arial', 50, bold=True)
-        self.go_text = self.font.render('GO ➡️', True, RED)
+        # State
+        self.score = 0
+        self.game_over = False
+        self.victory = False
+        self.last_hit_enemy = None # Tracks who the player is punching to show their HP
+
+        # Fonts
+        self.font_large = pygame.font.SysFont('Impact', 60)
+        self.font_medium = pygame.font.SysFont('Arial', 32, bold=True)
+        self.font_small = pygame.font.SysFont('Arial', 18, bold=True)
+        
+        self.go_text = self.font_medium.render('GO ➡️', True, RED)
         self.go_flash_timer = 0
 
-        # Define enemy waves: (trigger_camera_x, list_of_spawn_coords_in_world_space)
+        # Waves: (Trigger camera X, Spawn lists, is_boss_wave)
         self.waves = [
             {
                 'trigger': 400, 
-                'spawns': [(1000, 400), (1100, 480)], 
+                'spawns': [(1000, 400, 'minion'), (1100, 480, 'minion')], 
                 'spawned': False
             },
             {
                 'trigger': 1400, 
-                'spawns': [(2000, 380), (2100, 480), (2200, 430)], 
+                'spawns': [(2000, 380, 'minion'), (2100, 480, 'minion'), (2200, 430, 'minion')], 
+                'spawned': False
+            },
+            {
+                'trigger': 2300, # Final Boss Arena!
+                'spawns': [(3000, 440, 'boss')], 
                 'spawned': False
             }
         ]
 
     def draw_background(self, screen):
-        # Draw sky
         screen.fill(SKY_BLUE)
-        
-        # Draw scrolling ground
         ground_rect = pygame.Rect(0, MIN_Y - 40, SCREEN_WIDTH, SCREEN_HEIGHT - MIN_Y + 40)
         pygame.draw.rect(screen, GROUND_GREEN, ground_rect)
         
-        # Draw simple scrolling trees to give a sense of movement
         for i in range(0, self.world_width, 250):
             tree_pos_x = i - self.camera_x
-            # Only draw trees if they are currently visible on screen
             if -100 < tree_pos_x < SCREEN_WIDTH + 100:
-                # Trunk
                 pygame.draw.rect(screen, (139, 69, 19), [tree_pos_x, MIN_Y - 100, 20, 60]) 
-                # Leaves
                 pygame.draw.circle(screen, (0, 128, 0), (tree_pos_x + 10, MIN_Y - 120), 40) 
 
-    def draw_hud(self, screen):
-        # Flash the "GO!" indicator at the right edge when the path is clear
-        if not self.screen_lock:
+    def draw_hud(self, screen, player):
+        # 1. Player Health Bar & Info
+        pygame.draw.rect(screen, BLACK, [20, 20, 204, 24]) # Border
+        pygame.draw.rect(screen, RED, [22, 22, 200, 20])   # Background (Red)
+        hp_width = max(0, int(200 * (player.hp / 100)))
+        pygame.draw.rect(screen, GREEN, [22, 22, hp_width, 20]) # Health (Green)
+        
+        player_text = self.font_small.render(f"PLAYER   LIVES: {player.lives}", True, WHITE)
+        screen.blit(player_text, (20, 48))
+
+        # 2. Score
+        score_text = self.font_small.render(f"SCORE: {self.score:05d}", True, YELLOW)
+        screen.blit(score_text, (20, 70))
+
+        # 3. Targeted Enemy Health Bar (Top Right)
+        if self.last_hit_enemy and self.last_hit_enemy.alive():
+            e = self.last_hit_enemy
+            name = "BOSS" if e.is_boss else "PUNKER"
+            color = PURPLE if e.is_boss else BLUE
+            
+            # Enemy HP bar container
+            pygame.draw.rect(screen, BLACK, [SCREEN_WIDTH - 224, 20, 204, 18])
+            pygame.draw.rect(screen, RED, [SCREEN_WIDTH - 222, 22, 200, 14])
+            e_hp_width = int(200 * (e.health / e.max_health))
+            pygame.draw.rect(screen, color, [SCREEN_WIDTH - 222, 22, e_hp_width, 14])
+            
+            enemy_text = self.font_small.render(name, True, WHITE)
+            screen.blit(enemy_text, (SCREEN_WIDTH - 224, 42))
+
+        # 4. Flashing "GO ➡️" indicator
+        if not self.screen_lock and not self.victory:
             self.go_flash_timer = (self.go_flash_timer + 1) % 60
             if self.go_flash_timer < 30:
                 screen.blit(self.go_text, (SCREEN_WIDTH - self.go_text.get_width() - 20, 20))
+
+        # 5. Victory Screen Overlay
+        if self.victory:
+            overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
+            overlay.fill((0, 0, 0, 150)) # Translucent black background
+            screen.blit(overlay, (0,0))
+            
+            victory_text = self.font_large.render("STAGE CLEAR!", True, YELLOW)
+            sub_text = self.font_medium.render(f"FINAL SCORE: {self.score}", True, WHITE)
+            screen.blit(victory_text, (SCREEN_WIDTH//2 - victory_text.get_width()//2, SCREEN_HEIGHT//2 - 60))
+            screen.blit(sub_text, (SCREEN_WIDTH//2 - sub_text.get_width()//2, SCREEN_HEIGHT//2 + 20))
+
+        # 6. Game Over Screen Overlay
+        elif self.game_over:
+            overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
+            overlay.fill((150, 0, 0, 150)) # Translucent red background
+            screen.blit(overlay, (0,0))
+            
+            lose_text = self.font_large.render("GAME OVER", True, WHITE)
+            sub_text = self.font_medium.render("PRESS 'R' TO RESTART", True, YELLOW)
+            screen.blit(lose_text, (SCREEN_WIDTH//2 - lose_text.get_width()//2, SCREEN_HEIGHT//2 - 60))
+            screen.blit(sub_text, (SCREEN_WIDTH//2 - sub_text.get_width()//2, SCREEN_HEIGHT//2 + 20))
 
 # --- Player Class ---
 class Player(pygame.sprite.Sprite):
@@ -80,13 +140,15 @@ class Player(pygame.sprite.Sprite):
         self.image.fill(WHITE)
         self.rect = self.image.get_rect()
         
-        # Starting position in World Space
         self.rect.x = 200
         self.rect.y = 400
         
-        # Shadow setup
         self.shadow_rect = pygame.Rect(0, 0, 40, 10)
         self.update_shadow()
+
+        # Stats
+        self.hp = 100
+        self.lives = 3
 
         # States
         self.is_attacking = False
@@ -98,14 +160,34 @@ class Player(pygame.sprite.Sprite):
     def update_shadow(self):
         self.shadow_rect.midbottom = self.rect.midbottom
 
-    def take_hit(self, knockback_dir):
-        if not self.is_hit:
+    def take_hit(self, damage, knockback_dir):
+        if not self.is_hit and self.hp > 0:
             self.is_hit = True
             self.hit_timer = 15
             self.rect.x += knockback_dir * 20
+            self.hp = max(0, self.hp - damage)
             self.image.fill(YELLOW)  # Flash yellow when hurt
 
+    def reset_spawn(self):
+        """Resets position and HP when losing a life."""
+        self.hp = 100
+        self.is_hit = False
+        self.is_attacking = False
+        self.image.fill(WHITE)
+        self.rect.y = 400
+
     def update(self, game_manager):
+        # Handle death / respawn mechanics
+        if self.hp <= 0:
+            self.lives -= 1
+            if self.lives > 0:
+                self.reset_spawn()
+                # Knock back slightly upon spawning
+                self.rect.x = game_manager.camera_x + 100
+            else:
+                game_manager.game_over = True
+            return
+
         # Handle hit stun
         if self.is_hit:
             self.hit_timer -= 1
@@ -122,7 +204,7 @@ class Player(pygame.sprite.Sprite):
                 self.is_attacking = False
                 self.image.fill(WHITE)
         else:
-            # Handle standard movement
+            # Handle movement keys
             keys = pygame.key.get_pressed()
             if keys[pygame.K_LEFT]:
                 self.rect.x -= PLAYER_SPEED
@@ -141,17 +223,13 @@ class Player(pygame.sprite.Sprite):
                 self.attack_timer = 10
                 self.image.fill(RED)
 
-        # Clamping player inside the walkable world boundaries
+        # Clamping boundary checks
         if self.rect.bottom > MAX_Y: self.rect.bottom = MAX_Y
         if self.rect.bottom < MIN_Y: self.rect.bottom = MIN_Y
-        
-        # Left boundary of the entire world
         if self.rect.left < 0: self.rect.left = 0
-        
-        # Right boundary of the entire world
         if self.rect.right > game_manager.world_width: self.rect.right = game_manager.world_width
 
-        # Keep player on screen if camera is locked by enemies
+        # Screen boundary locking during fights
         if game_manager.screen_lock:
             if self.rect.left < game_manager.camera_x:
                 self.rect.left = game_manager.camera_x
@@ -160,20 +238,36 @@ class Player(pygame.sprite.Sprite):
 
         self.update_shadow()
 
-# --- Enemy Class ---
+# --- Enemy Class (Minions & Bosses) ---
 class Enemy(pygame.sprite.Sprite):
-    def __init__(self, x, y):
+    def __init__(self, x, y, enemy_type='minion'):
         super().__init__()
         self.image = pygame.Surface([40, 80])
-        self.image.fill(BLUE)
+        self.enemy_type = enemy_type
+        
+        # Configure variables based on type
+        if enemy_type == 'boss':
+            self.image.fill(PURPLE) # Purple is the Boss!
+            self.max_health = 10.0
+            self.speed = BOSS_SPEED
+            self.damage = 15
+            self.is_boss = True
+        else:
+            self.image.fill(BLUE)   # Standard Blue Punker
+            self.max_health = 3.0
+            self.speed = ENEMY_SPEED
+            self.damage = 8
+            self.is_boss = False
+            
+        self.health = self.max_health
         self.rect = self.image.get_rect()
         self.rect.x = x
         self.rect.y = y
         
-        # Shadow setup
         self.shadow_rect = pygame.Rect(0, 0, 40, 10)
         self.update_shadow()
 
+        # State/AI timers
         self.knockback_timer = 0
         self.facing_right = False
         self.is_attacking = False
@@ -181,44 +275,50 @@ class Enemy(pygame.sprite.Sprite):
         self.attack_cooldown = 0
         self.decision_timer = 0
         self.target_offset_y = 0
-        self.health = 3  # Takes 3 hits to defeat
 
     def update_shadow(self):
         self.shadow_rect.midbottom = self.rect.midbottom
 
-    def take_hit(self, knockback_dir):
+    def take_hit(self, knockback_dir, game_manager):
         if self.knockback_timer == 0:
             self.health -= 1
+            game_manager.last_hit_enemy = self # Highlight this enemy's health bar
+            
             if self.health <= 0:
-                self.kill()  # Safely delete enemy sprite
+                # Add score on defeat
+                game_manager.score += 500 if self.is_boss else 100
+                if self.is_boss:
+                    game_manager.victory = True
+                self.kill()
                 return
+                
             self.image.fill(WHITE)
             self.knockback_timer = 12
             self.is_attacking = False
-            self.rect.x += knockback_dir * 25
+            self.rect.x += knockback_dir * 20
 
     def update(self, player_target, game_manager):
-        # Reeling from hit
+        # Reeling from getting hit
         if self.knockback_timer > 0:
             self.knockback_timer -= 1
             if self.knockback_timer == 0: 
-                self.image.fill(BLUE)
+                self.image.fill(PURPLE if self.is_boss else BLUE)
             self.update_shadow()
             return
             
-        # Executing attack
+        # Executing strike
         if self.is_attacking:
             self.attack_timer -= 1
             if self.attack_timer <= 0:
                 self.is_attacking = False
-                self.image.fill(BLUE)
+                self.image.fill(PURPLE if self.is_boss else BLUE)
             self.update_shadow()
             return
 
         if self.attack_cooldown > 0:
             self.attack_cooldown -= 1
 
-        # AI Behavior Decisions
+        # AI decision tree
         self.decision_timer -= 1
         if self.decision_timer <= 0:
             self.decision_timer = random.randint(15, 30)
@@ -231,37 +331,36 @@ class Enemy(pygame.sprite.Sprite):
         dy = target_y - self.rect.bottom
         self.facing_right = dx > 0
 
-        # Trigger punch if aligned with player
-        if abs(dx) < 65 and abs(dy) < 15 and self.attack_cooldown == 0 and not player_target.is_hit:
+        # Trigger Attack if close
+        if abs(dx) < 65 and abs(dy) < 15 and self.attack_cooldown == 0 and player_target.hp > 0 and not player_target.is_hit:
             self.is_attacking = True
             self.attack_timer = 15
-            self.attack_cooldown = 45
-            self.image.fill(RED)  # Flash red before punching
+            self.attack_cooldown = 45 if not self.is_boss else 30 # Boss attacks more frequently!
+            self.image.fill(RED)  # Flash red warning indicator
             self.update_shadow()
             return
 
-        # Walk to player (Y/Z depth priority)
+        # Chase mechanics (Align Y, then X)
         if abs(dy) > 10:
-            self.rect.y += ENEMY_SPEED if dy > 0 else -ENEMY_SPEED
+            self.rect.y += self.speed if dy > 0 else -self.speed
         elif abs(dx) > 15:
-            self.rect.x += ENEMY_SPEED if dx > 0 else -ENEMY_SPEED
+            self.rect.x += self.speed if dx > 0 else -self.speed
             
-        # World boundaries clamp
+        # Hard limits
         if self.rect.bottom > MAX_Y: self.rect.bottom = MAX_Y
         if self.rect.bottom < MIN_Y: self.rect.bottom = MIN_Y
 
         self.update_shadow()
 
-# --- Main Game Setup ---
+# --- Main Program ---
 def main():
     pygame.init()
     screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
-    pygame.display.set_caption("Stage Progression Prototype")
+    pygame.display.set_caption("Retro Arcade Beat 'Em Up!")
     
     game_manager = GameManager()
     player = Player()
     
-    # Sprite Groups
     all_sprites = pygame.sprite.Group()
     enemies = pygame.sprite.Group()
     all_sprites.add(player)
@@ -273,73 +372,80 @@ def main():
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
+            
+            # Restart game via 'R' key if Game Over
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_r:
+                if game_manager.game_over or game_manager.victory:
+                    main() # Restart the main loop
+                    return
 
-        # --- Wave Management ---
-        game_manager.screen_lock = len(enemies) > 0
-        
-        # Check triggers and spawn wave
-        for wave in game_manager.waves:
-            if not wave['spawned'] and game_manager.camera_x >= wave['trigger']:
-                wave['spawned'] = True
-                for pos in wave['spawns']:
-                    new_enemy = Enemy(pos[0], pos[1])
-                    enemies.add(new_enemy)
-                    all_sprites.add(new_enemy)
-        
-        # --- Update ---
-        player.update(game_manager)
-        enemies.update(player, game_manager)
-        
-        # Smooth camera following (runs only when screen is not locked)
-        if not game_manager.screen_lock:
-            target_camera_x = player.rect.centerx - SCREEN_WIDTH // 2
-            game_manager.camera_x = max(0, min(target_camera_x, game_manager.world_width - SCREEN_WIDTH))
+        # Stop updates if the game is resolved
+        if not game_manager.game_over and not game_manager.victory:
+            # --- Wave Management ---
+            game_manager.screen_lock = len(enemies) > 0
+            
+            # Wave triggers
+            for wave in game_manager.waves:
+                if not wave['spawned'] and game_manager.camera_x >= wave['trigger']:
+                    wave['spawned'] = True
+                    for pos in wave['spawns']:
+                        new_enemy = Enemy(pos[0], pos[1], pos[2])
+                        enemies.add(new_enemy)
+                        all_sprites.add(new_enemy)
+            
+            # --- Updates ---
+            player.update(game_manager)
+            enemies.update(player, game_manager)
+            
+            # Smooth camera tracking
+            if not game_manager.screen_lock:
+                target_camera_x = player.rect.centerx - SCREEN_WIDTH // 2
+                game_manager.camera_x = max(0, min(target_camera_x, game_manager.world_width - SCREEN_WIDTH))
 
-        # --- Combat System ---
-        # 1. Player punching Enemy
-        if player.is_attacking and player.attack_timer == 9:
+            # --- Combat Collisions ---
+            # 1. Player punching Enemy
+            if player.is_attacking and player.attack_timer == 9:
+                for enemy in enemies:
+                    z_diff = abs(player.shadow_rect.centery - enemy.shadow_rect.centery)
+                    x_diff = enemy.rect.centerx - player.rect.centerx
+                    
+                    in_range_x = (player.facing_right and 0 < x_diff < 70) or \
+                                 (not player.facing_right and -70 < x_diff < 0)
+
+                    if z_diff < 20 and in_range_x:
+                        knock_dir = 1 if player.facing_right else -1
+                        enemy.take_hit(knock_dir, game_manager)
+                        game_manager.score += 50 # Points for landing a punch!
+            
+            # 2. Enemies punching Player
             for enemy in enemies:
-                z_diff = abs(player.shadow_rect.centery - enemy.shadow_rect.centery)
-                x_diff = enemy.rect.centerx - player.rect.centerx
-                
-                # Check directional reach
-                in_range_x = (player.facing_right and 0 < x_diff < 70) or \
-                             (not player.facing_right and -70 < x_diff < 0)
+                if enemy.is_attacking and enemy.attack_timer == 5:
+                    z_diff = abs(player.shadow_rect.centery - enemy.shadow_rect.centery)
+                    x_diff = player.rect.centerx - enemy.rect.centerx
+                    
+                    in_range_x = (enemy.facing_right and 0 < x_diff < 70) or \
+                                 (not enemy.facing_right and -70 < x_diff < 0)
 
-                if z_diff < 20 and in_range_x:
-                    knock_dir = 1 if player.facing_right else -1
-                    enemy.take_hit(knock_dir)
-        
-        # 2. Enemies punching Player
-        for enemy in enemies:
-            if enemy.is_attacking and enemy.attack_timer == 5:
-                z_diff = abs(player.shadow_rect.centery - enemy.shadow_rect.centery)
-                x_diff = player.rect.centerx - enemy.rect.centerx
-                
-                # Check directional reach
-                in_range_x = (enemy.facing_right and 0 < x_diff < 70) or \
-                             (not enemy.facing_right and -70 < x_diff < 0)
+                    if z_diff < 20 and in_range_x:
+                        knock_dir = 1 if enemy.facing_right else -1
+                        player.take_hit(enemy.damage, knock_dir)
 
-                if z_diff < 20 and in_range_x:
-                    knock_dir = 1 if enemy.facing_right else -1
-                    player.take_hit(knock_dir)
-
-        # --- Draw Stage (Using Camera Offset) ---
+        # --- Draw Stage ---
         game_manager.draw_background(screen)
         
-        # Draw shadows first (sorted) so they are always under feet
+        # Shadows
         sorted_sprites = sorted(all_sprites.sprites(), key=lambda s: s.rect.bottom)
         for sprite in sorted_sprites:
             shadow_x = sprite.shadow_rect.x - game_manager.camera_x
             pygame.draw.ellipse(screen, GRAY, (shadow_x, sprite.shadow_rect.y, sprite.shadow_rect.width, sprite.shadow_rect.height))
             
-        # Draw main character bodies (depth sorted) on top
+        # Sprites
         for sprite in sorted_sprites:
             screen_x = sprite.rect.x - game_manager.camera_x
             screen.blit(sprite.image, (screen_x, sprite.rect.y))
 
-        # Draw text & HUD overlays on top of world
-        game_manager.draw_hud(screen)
+        # HUD / UI
+        game_manager.draw_hud(screen, player)
         
         pygame.display.flip()
         clock.tick(60)
