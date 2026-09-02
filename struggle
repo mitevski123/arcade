@@ -5,7 +5,6 @@ import sys
 # --- Constants ---
 SCREEN_WIDTH = 800
 SCREEN_HEIGHT = 600
-# --- FIX: Adjusted Y-boundaries for taller sprites ---
 MIN_Y, MAX_Y = 380, 560
 
 # Player Physics
@@ -13,12 +12,10 @@ PLAYER_ACCEL = 0.8
 PLAYER_FRICTION = 0.82
 PLAYER_MAX_SPEED = 6.0
 
-# --- Sprite Sheet Dimensions ---
-SHEET_FRAME_WIDTH = 112
-SHEET_FRAME_HEIGHT = 114
-# --- The final size you want your character to be on screen ---
-RENDER_WIDTH = 80
-RENDER_HEIGHT = 110
+# --- Your Custom Sprite Sheet Dimensions ---
+# Assuming a single row of 8 frames.
+SHEET_FRAME_WIDTH = 77  # The width of one character frame
+SHEET_FRAME_HEIGHT = 122 # The height of one character frame
 
 # --- Colors ---
 SKY_BLUE = (135, 206, 235)
@@ -34,19 +31,13 @@ class SpriteSheet:
             print(f"Unable to load spritesheet image: {filename}")
             raise SystemExit(e)
 
-    def get_image(self, x, y, width, height):
-        image = pygame.Surface((width, height), pygame.SRCALPHA)
-        image.blit(self.sheet, (0, 0), (x, y, width, height))
-        # --- FIX: Using smoothscale for better resizing ---
-        scaled_image = pygame.transform.smoothscale(image, (RENDER_WIDTH, RENDER_HEIGHT))
-        return scaled_image
-
-    def get_animation_frames(self, start_row, num_rows, frames_per_row, width, height):
+    def get_animation_frames(self, num_frames, width, height):
+        """Extracts frames from a single horizontal row."""
         frames = []
-        for row in range(start_row, start_row + num_rows):
-            for col in range(frames_per_row):
-                frame_x, frame_y = col * width, row * height
-                frames.append(self.get_image(frame_x, frame_y, width, height))
+        for i in range(num_frames):
+            image = pygame.Surface((width, height), pygame.SRCALPHA)
+            image.blit(self.sheet, (0, 0), (i * width, 0, width, height))
+            frames.append(image)
         return frames
 
 # --- Player Class ---
@@ -55,9 +46,8 @@ class Player(pygame.sprite.Sprite):
         super().__init__()
         self.sprites = sprites
         self.image = self.sprites['idle'][0]
-        # --- FIX: Set the initial position using the BOTTOM of the sprite ---
-        self.rect = self.image.get_rect(midbottom=(SCREEN_WIDTH // 3, MAX_Y - 20))
-        self.shadow_rect = pygame.Rect(0, 0, RENDER_WIDTH * 0.6, 10)
+        self.rect = self.image.get_rect(midbottom=(SCREEN_WIDTH // 3, MAX_Y))
+        self.shadow_rect = pygame.Rect(0, 0, self.rect.width * 0.7, 10)
         
         self.pos_x, self.pos_y = float(self.rect.x), float(self.rect.y)
         self.vel_x, self.vel_y = 0.0, 0.0
@@ -66,7 +56,7 @@ class Player(pygame.sprite.Sprite):
         self.update_shadow()
 
     def update_shadow(self):
-        self.shadow_rect.midbottom = self.rect.midbottom
+        self.shadow_rect.center = self.rect.midbottom
 
     def update(self):
         keys = pygame.key.get_pressed()
@@ -116,10 +106,14 @@ def main():
         assets_path = os.path.join(script_directory, 'assets')
         player_sheet = SpriteSheet(os.path.join(assets_path, 'player_sheet.png'))
         
-        walk_frames = player_sheet.get_animation_frames(start_row=0, num_rows=2, frames_per_row=4, width=SHEET_FRAME_WIDTH, height=SHEET_FRAME_HEIGHT)
-        player_sprites = {'idle': [walk_frames[0]], 'walk': walk_frames}
+        # --- FIX: Slicing all 8 frames from a single row ---
+        walk_frames = player_sheet.get_animation_frames(num_frames=8, width=SHEET_FRAME_WIDTH, height=SHEET_FRAME_HEIGHT)
+        player_sprites = {
+            'idle': [walk_frames[0]],
+            'walk': walk_frames
+        }
     except pygame.error as e:
-        print(f"❌ Error loading 'player_sheet.png': {e}"); pygame.quit(); sys.exit()
+        print(f"❌ Error loading 'player_sheet.png': {e}\nCheck your 'assets' folder."); pygame.quit(); sys.exit()
 
     player = Player(player_sprites)
     all_sprites = pygame.sprite.Group(player)
@@ -133,7 +127,7 @@ def main():
 
         player.update()
         
-        target_camera_x = player.rect.centerx - SCREEN_WIDTH // 2
+        target_camera_x = player.pos_x - SCREEN_WIDTH // 3
         camera_x = max(0, min(target_camera_x, 3200 - SCREEN_WIDTH))
 
         screen.fill(SKY_BLUE)
