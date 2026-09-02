@@ -5,11 +5,11 @@ import random
 SCREEN_WIDTH = 800
 SCREEN_HEIGHT = 600
 PLAYER_SPEED = 5
-ENEMY_SPEED = 2.5  # Slightly slower than player so you can escape!
+ENEMY_SPEED = 2.5
 
 # Walkable floor boundaries
-MIN_Y = 350  
-MAX_Y = 550  
+MIN_Y = 350
+MAX_Y = 550
 
 # Colors
 WHITE = (255, 255, 255)
@@ -21,57 +21,94 @@ GRAY = (80, 80, 80)
 SKY_BLUE = (135, 206, 235)
 GROUND_GREEN = (34, 139, 34)
 
-# --- Player Class ---
+# --- Game Manager & Camera ---
+class GameManager:
+    def __init__(self):
+        self.camera_x = 0
+        self.world_width = 3200  # The total width of our scrolling level
+        self.screen_lock = False
+        self.font = pygame.font.SysFont('Arial', 50, bold=True)
+        self.go_text = self.font.render('GO ➡️', True, RED)
+        self.go_flash_timer = 0
+
+        # Define enemy waves: (trigger_x_position, list_of_spawn_coords)
+        self.waves = [
+            {'trigger': 600, 'spawns': [(1000, 400), (1100, 450)], 'spawned': False},
+            {'trigger': 1800, 'spawns': [(2200, 380), (2250, 480), (2300, 420)], 'spawned': False}
+        ]
+
+    def update_camera(self, player_rect):
+        # Camera follows the player, but locks at the edges of the world
+        target_camera_x = player_rect.centerx - SCREEN_WIDTH // 2
+        
+        # Clamp camera to world boundaries
+        self.camera_x = max(0, min(target_camera_x, self.world_width - SCREEN_WIDTH))
+
+    def draw_background(self, screen):
+        # Draw sky
+        screen.fill(SKY_BLUE)
+        # Draw scrolling ground
+        ground_rect = pygame.Rect(0, MIN_Y - 40, SCREEN_WIDTH, SCREEN_HEIGHT - MIN_Y + 40)
+        pygame.draw.rect(screen, GROUND_GREEN, ground_rect)
+        # Simple details to show scrolling
+        for i in range(0, self.world_width, 200):
+            tree_pos_x = i - self.camera_x
+            if -50 < tree_pos_x < SCREEN_WIDTH + 50:
+                pygame.draw.rect(screen, (139, 69, 19), [tree_pos_x, MIN_Y - 100, 20, 60]) # Trunk
+                pygame.draw.circle(screen, (0, 128, 0), (tree_pos_x + 10, MIN_Y - 120), 40) # Leaves
+
+
+    def draw_hud(self, screen):
+        # Flash the "GO" sign when the screen is unlocked
+        if not self.screen_lock:
+            self.go_flash_timer = (self.go_flash_timer + 1) % 60
+            if self.go_flash_timer < 30:
+                screen.blit(self.go_text, (SCREEN_WIDTH - self.go_text.get_width() - 20, 20))
+
+
 class Player(pygame.sprite.Sprite):
     def __init__(self):
         super().__init__()
         self.image = pygame.Surface([40, 80])
         self.image.fill(WHITE)
-        self.rect = self.image.get_rect()
-        self.rect.x = 150
-        self.rect.y = 400
-        
-        # Shadow setup
+        self.rect = self.image.get_rect(center=(SCREEN_WIDTH // 4, 400))
         self.shadow_rect = pygame.Rect(0, 0, 40, 10)
         self.update_shadow()
-        
-        # Combat and state variables
+
         self.is_attacking = False
         self.attack_timer = 0
         self.facing_right = True
         self.is_hit = False
         self.hit_timer = 0
-
+        
     def update_shadow(self):
         self.shadow_rect.midbottom = self.rect.midbottom
 
     def take_hit(self, knockback_dir):
-        """Called when the enemy punches the player."""
-        if not self.is_hit:  # Simple invincibility frames
+        if not self.is_hit:
             self.is_hit = True
             self.hit_timer = 15
             self.rect.x += knockback_dir * 20
-            self.image.fill(YELLOW) # Flash yellow when hurt
+            self.image.fill(YELLOW)
 
-    def update(self):
+    def update(self, game_manager):
         keys = pygame.key.get_pressed()
-        
-        # Handle getting hit state
+
         if self.is_hit:
             self.hit_timer -= 1
             if self.hit_timer <= 0:
                 self.is_hit = False
                 self.image.fill(WHITE)
-            return  # Can't move/attack while reeling from a hit
+            self.update_shadow()
+            return
 
-        # Handle attacking state
         if self.is_attacking:
             self.attack_timer -= 1
             if self.attack_timer <= 0:
                 self.is_attacking = False
                 self.image.fill(WHITE)
         else:
-            # Standard Movement
+            # Player Movement
             if keys[pygame.K_LEFT]:
                 self.rect.x -= PLAYER_SPEED
                 self.facing_right = False
@@ -82,133 +119,137 @@ class Player(pygame.sprite.Sprite):
                 self.rect.y -= PLAYER_SPEED
             if keys[pygame.K_DOWN]:
                 self.rect.y += PLAYER_SPEED
-
-            # Trigger Attack
+            
             if keys[pygame.K_SPACE]:
                 self.is_attacking = True
-                self.attack_timer = 10  # Attack lasts 10 frames
-                self.image.fill(RED)     # Turn red when attacking
+                self.attack_timer = 10
+                self.image.fill(RED)
 
-        # Screen boundaries
-        if self.rect.left < 0: self.rect.left = 0
-        if self.rect.right > SCREEN_WIDTH: self.rect.right = SCREEN_WIDTH
+        # Player boundaries are now tied to the camera's view
+        if game_manager.screen_lock:
+             # When screen is locked, player cannot leave the view
+            if self.rect.left < 0: self.rect.left = 0
+            if self.rect.right > SCREEN_WIDTH: self.rect.right = SCREEN_WIDTH
+        else:
+             # When screen is not locked, player pushes the camera at the edges
+            if self.rect.centerx > SCREEN_WIDTH * 0.6:
+                scroll_speed = self.rect.centerx - SCREEN_WIDTH * 0.6
+                game_manager.camera_x += scroll_speed
+                self.rect.centerx = SCREEN_WIDTH * 0.6
+            if self.rect.centerx < SCREEN_WIDTH * 0.4:
+                scroll_speed = self.rect.centerx - SCREEN_WIDTH * 0.4
+                game_manager.camera_x += scroll_speed
+                self.rect.centerx = SCREEN_WIDTH * 0.4
+
         if self.rect.bottom > MAX_Y: self.rect.bottom = MAX_Y
         if self.rect.bottom < MIN_Y: self.rect.bottom = MIN_Y
-
+        
         self.update_shadow()
 
-# --- Enemy Class with AI ---
+
 class Enemy(pygame.sprite.Sprite):
-    def __init__(self):
+    def __init__(self, x, y):
         super().__init__()
         self.image = pygame.Surface([40, 80])
         self.image.fill(BLUE)
-        self.rect = self.image.get_rect()
-        self.rect.x = 550
-        self.rect.y = 400
-        
-        # Shadow setup
+        self.start_pos_x = x
+        self.start_pos_y = y
+        self.rect = self.image.get_rect(center=(x, y))
         self.shadow_rect = pygame.Rect(0, 0, 40, 10)
         self.update_shadow()
-        
-        # AI & Combat States
+
         self.knockback_timer = 0
         self.facing_right = False
-        
         self.is_attacking = False
         self.attack_timer = 0
         self.attack_cooldown = 0
-        
-        # AI decision delay (makes behavior less robotic)
         self.decision_timer = 0
         self.target_offset_y = 0
+        self.health = 3 # Enemies can now take 3 hits
 
     def update_shadow(self):
         self.shadow_rect.midbottom = self.rect.midbottom
 
     def take_hit(self, knockback_dir):
-        """Called when player punches the enemy."""
-        self.image.fill(WHITE) # Flash white on impact
-        self.knockback_timer = 12
-        self.is_attacking = False  # Interrupt enemy's attack
-        self.rect.x += knockback_dir * 25 # Get knocked back
+        if self.knockback_timer == 0:
+            self.health -= 1
+            if self.health <= 0:
+                self.kill() # Remove sprite from all groups
+                return
 
-    def update(self, player_target):
-        # 1. Handle being knocked back (hit stun)
+            self.image.fill(WHITE)
+            self.knockback_timer = 12
+            self.is_attacking = False
+            self.rect.x += knockback_dir * 25
+
+    def update(self, player_target, game_manager):
         if self.knockback_timer > 0:
             self.knockback_timer -= 1
-            if self.knockback_timer == 0:
-                self.image.fill(BLUE)
+            if self.knockback_timer == 0: self.image.fill(BLUE)
+            self.update_shadow()
             return
-
-        # 2. Handle active attack execution
+            
         if self.is_attacking:
             self.attack_timer -= 1
             if self.attack_timer <= 0:
                 self.is_attacking = False
                 self.image.fill(BLUE)
+            self.update_shadow()
             return
 
-        # Decrement general attack cooldown
         if self.attack_cooldown > 0:
             self.attack_cooldown -= 1
 
-        # 3. AI Decision Making / Movement
+        # AI Logic
         self.decision_timer -= 1
         if self.decision_timer <= 0:
-            self.decision_timer = random.randint(15, 30) # Rethink strategy every 15-30 frames
-            # Add a small random offset so enemies don't stack perfectly on top of you
+            self.decision_timer = random.randint(15, 30)
             self.target_offset_y = random.randint(-15, 15)
 
-        # Calculate distances to player
-        target_x = player_target.rect.centerx
-        target_y = player_target.rect.bottom + self.target_offset_y
+        # AI needs to know player's position relative to the camera
+        player_screen_pos = player_target.rect
+        
+        target_x = player_screen_pos.centerx + game_manager.camera_x
+        target_y = player_screen_pos.bottom + self.target_offset_y
         
         dx = target_x - self.rect.centerx
         dy = target_y - self.rect.bottom
-
-        # Face the player
         self.facing_right = dx > 0
 
-        # Run attack check if close enough
+        # Attack if close
         if abs(dx) < 65 and abs(dy) < 15 and self.attack_cooldown == 0 and not player_target.is_hit:
             self.is_attacking = True
-            self.attack_timer = 15  # Attack frames
-            self.attack_cooldown = 45  # Cooldown before next punch
-            self.image.fill(RED)  # Flash red to telegraph attack
+            self.attack_timer = 15
+            self.attack_cooldown = 45
+            self.image.fill(RED)
+            self.update_shadow()
             return
 
-        # Walk towards player: Classic "align Z depth first, then close X distance" AI
+        # Movement
         if abs(dy) > 10:
-            # Walk vertically to match the player's depth line
-            if dy > 0:
-                self.rect.y += ENEMY_SPEED
-            else:
-                self.rect.y -= ENEMY_SPEED
-        else:
-            # Walk horizontally once depth is relatively aligned
-            if dx > 15:
-                self.rect.x += ENEMY_SPEED
-            elif dx < -15:
-                self.rect.x -= ENEMY_SPEED
-
-        # Screen boundaries
-        if self.rect.left < 0: self.rect.left = 0
-        if self.rect.right > SCREEN_WIDTH: self.rect.right = SCREEN_WIDTH
+            self.rect.y += ENEMY_SPEED if dy > 0 else -ENEMY_SPEED
+        elif abs(dx) > 15:
+            self.rect.x += ENEMY_SPEED if dx > 0 else -ENEMY_SPEED
+            
+        # Boundaries (relative to world)
         if self.rect.bottom > MAX_Y: self.rect.bottom = MAX_Y
         if self.rect.bottom < MIN_Y: self.rect.bottom = MIN_Y
 
         self.update_shadow()
 
-# --- Main Game Loop ---
 def main():
     pygame.init()
     screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
-    pygame.display.set_caption("2.5D Beat 'Em Up AI Prototype")
+    pygame.display.set_caption("Stage Progression Prototype")
     
+    game_manager = GameManager()
     player = Player()
-    enemy = Enemy()
     
+    # Use sprite groups
+    all_sprites = pygame.sprite.Group()
+    enemies = pygame.sprite.Group()
+    all_sprites.add(player)
+
     clock = pygame.time.Clock()
     running = True
 
@@ -217,55 +258,67 @@ def main():
             if event.type == pygame.QUIT:
                 running = False
 
+        # --- Wave Management ---
+        game_manager.screen_lock = len(enemies) > 0
+        for wave in game_manager.waves:
+            if not wave['spawned'] and game_manager.camera_x >= wave['trigger']:
+                wave['spawned'] = True
+                for pos in wave['spawns']:
+                    new_enemy = Enemy(pos[0], pos[1])
+                    enemies.add(new_enemy)
+                    all_sprites.add(new_enemy)
+        
         # --- Update ---
-        player.update()
-        enemy.update(player)  # Pass player object to enemy so AI can track you
+        player.update(game_manager)
+        enemies.update(player, game_manager) # Pass both player and manager to AI
+        
+        if not game_manager.screen_lock:
+             game_manager.update_camera(player.rect)
 
-        # --- Combat Logic: Player hitting Enemy ---
+        # --- Combat ---
+        # Player attacking enemies
         if player.is_attacking and player.attack_timer == 9:
-            z_diff = abs(player.shadow_rect.centery - enemy.shadow_rect.centery)
-            x_diff = enemy.rect.centerx - player.rect.centerx
-            in_range_x = False
-            
-            if player.facing_right and 0 < x_diff < 70:
-                in_range_x = True
-            elif not player.facing_right and -70 < x_diff < 0:
-                in_range_x = True
+            for enemy in enemies:
+                z_diff = abs(player.shadow_rect.centery - enemy.shadow_rect.centery)
+                # Player's position is screen-based, enemy's is world-based. We need to compare them in the same space.
+                enemy_screen_x = enemy.rect.centerx - game_manager.camera_x
+                x_diff = enemy_screen_x - player.rect.centerx
+                
+                in_range_x = (player.facing_right and 0 < x_diff < 70) or \
+                             (not player.facing_right and -70 < x_diff < 0)
 
-            if z_diff < 20 and in_range_x:
-                knock_direction = 1 if player.facing_right else -1
-                enemy.take_hit(knock_direction)
-
-        # --- Combat Logic: Enemy hitting Player ---
-        if enemy.is_attacking and enemy.attack_timer == 5: # Attack hits halfway through animation
-            z_diff = abs(player.shadow_rect.centery - enemy.shadow_rect.centery)
-            x_diff = player.rect.centerx - enemy.rect.centerx
-            in_range_x = False
-            
-            if enemy.facing_right and 0 < x_diff < 70:
-                in_range_x = True
-            elif not enemy.facing_right and -70 < x_diff < 0:
-                in_range_x = True
-
-            if z_diff < 20 and in_range_x:
-                knock_direction = 1 if enemy.facing_right else -1
-                player.take_hit(knock_direction)
-
-        # --- Draw (Y-Sorting) ---
-        screen.fill(SKY_BLUE)
-        pygame.draw.rect(screen, GROUND_GREEN, [0, MIN_Y - 40, SCREEN_WIDTH, SCREEN_HEIGHT - MIN_Y + 40])
+                if z_diff < 20 and in_range_x:
+                    knock_dir = 1 if player.facing_right else -1
+                    enemy.take_hit(knock_dir)
         
-        # Shadows
-        pygame.draw.ellipse(screen, GRAY, player.shadow_rect)
-        pygame.draw.ellipse(screen, GRAY, enemy.shadow_rect)
-        
-        # Draw characters sorted by bottom coordinate (Z-depth)
-        characters = [player, enemy]
-        characters.sort(key=lambda char: char.rect.bottom)
-        
-        for char in characters:
-            screen.blit(char.image, char.rect)
+        # Enemies attacking Player
+        for enemy in enemies:
+            if enemy.is_attacking and enemy.attack_timer == 5:
+                z_diff = abs(player.shadow_rect.centery - enemy.shadow_rect.centery)
+                enemy_screen_x = enemy.rect.centerx - game_manager.camera_x
+                x_diff = player.rect.centerx - enemy_screen_x
+                
+                in_range_x = (enemy.facing_right and 0 < x_diff < 70) or \
+                             (not enemy.facing_right and -70 < x_diff < 0)
 
+                if z_diff < 20 and in_range_x:
+                    knock_dir = 1 if enemy.facing_right else -1
+                    player.take_hit(knock_dir)
+
+        # --- Draw ---
+        game_manager.draw_background(screen)
+        
+        # Sort all sprites by Y-position for correct draw order (depth)
+        sorted_sprites = sorted(all_sprites.sprites(), key=lambda s: s.rect.bottom)
+        
+        for sprite in sorted_sprites:
+            # Draw shadow and sprite relative to camera
+            screen_x = sprite.rect.x - game_manager.camera_x
+            shadow_x = sprite.shadow_rect.x - game_manager.camera_x
+            pygame.draw.ellipse(screen, GRAY, (shadow_x, sprite.shadow_rect.y, sprite.shadow_rect.width, sprite.shadow_rect.height))
+            screen.blit(sprite.image, (screen_x, sprite.rect.y))
+
+        game_manager.draw_hud(screen)
         pygame.display.flip()
         clock.tick(60)
 
@@ -273,3 +326,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
